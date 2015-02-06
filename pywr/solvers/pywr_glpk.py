@@ -44,11 +44,15 @@ class SolverGLPK(Solver):
                 intermediate_max_flow_constraints = self.intermediate_max_flow_constraints = {}
                 intermediate_nodes = route[1:-1]
                 for node in intermediate_nodes:
-                    if 'max_flow' in node.properties:
+                    if 'max_flow' in node.properties and node not in intermediate_max_flow_constraints:
                         row_idx = lp.rows.add(1)
                         row = lp.rows[row_idx]
-                        row.matrix = [(idx, 1.0) for idx in route_idxs]
                         intermediate_max_flow_constraints[node] = row
+                        col_idxs = []
+                        for col_idx, route in enumerate(routes):
+                            if node in route:
+                                col_idxs.append(col_idx)
+                        row.matrix = [(idx, 1.0) for idx in col_idxs]
 
             for supply_node, info in supply_nodes.items():
                 row_idx = lp.rows.add(1)
