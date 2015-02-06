@@ -26,6 +26,7 @@ class SolverGLPK(Solver):
             # each route between a supply and demand is represented as a column
             supply_nodes = self.supply_nodes = {}
             demand_nodes = self.demand_nodes = {}
+            intermediate_max_flow_constraints = self.intermediate_max_flow_constraints = {}
             lp.cols.add(len(routes))
             for col_idx, route in enumerate(routes):
                 col = lp.cols[col_idx]
@@ -41,7 +42,6 @@ class SolverGLPK(Solver):
                 demand_nodes[demand_node]['cols'].append(col)
                 demand_nodes[demand_node]['col_idxs'].append(col_idx)
 
-                intermediate_max_flow_constraints = self.intermediate_max_flow_constraints = {}
                 intermediate_nodes = route[1:-1]
                 for node in intermediate_nodes:
                     if 'max_flow' in node.properties and node not in intermediate_max_flow_constraints:
