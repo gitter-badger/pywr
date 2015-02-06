@@ -14,8 +14,11 @@ from pywr.core import *
 RESERVOIR_MAX_VOLUME = 20000
 RESERVOIR_INITIAL_VOLUME = RESERVOIR_MAX_VOLUME * 0.8
 EMERGENCY_STORAGE_VOLUME = RESERVOIR_MAX_VOLUME * 0.15
-TRANSFER_COST = 2.0
+TRANSFER_COST = 20.0
 LINK_MAX_FLOW = 10.0
+
+from_date = pd.to_datetime('1991-01-01')
+to_date = pd.to_datetime('1998-12-31')
 
 def interpolate_profile(xp, yp):
     y = np.interp(np.arange(0, 367, dtype=int), xp, yp)
@@ -37,15 +40,15 @@ def create_model():
 
     # abstractions are required as model doesn't currently support river
     # flowing directly into the reservoir
-    abs1 = RiverAbstraction(model=model, max_flow=9999, position=(-2,1))
-    abs2 = RiverAbstraction(model=model, max_flow=9999, position=(2,1))
+    abs1 = RiverAbstraction(model=model, name='abs1', max_flow=9999, position=(-2,1))
+    abs2 = RiverAbstraction(model=model, name='abs2', max_flow=9999, position=(2,1))
 
     reservoir1 = Reservoir(model=model, name='res1', position=(-1,1))
     reservoir2 = Reservoir(model=model, name='res2', position=(1,1))
 
     for reservoir in (reservoir1, reservoir2):
         # model doesn't do emergency storage yet, so model it as a reduction in max volume
-        reservoir.properties['max_volume'] = Parameter(RESERVOIR_MAX_VOLUME - EMERGENCY_STORAGE_VOLUME)
+        reservoir.properties['max_volume'] = Parameter(RESERVOIR_MAX_VOLUME)
         reservoir.properties['current_volume'] = Parameter(RESERVOIR_INITIAL_VOLUME)
 
     # model doesn't do compensation flow yet, so add it as a demand instead
@@ -74,7 +77,8 @@ def create_model():
     return model
 
 def reset_model(model):
-    model.timestamp = pd.to_datetime('1990-01-01')
+    # reset the model to it's initial state
+    model.timestamp = from_date
     nodes = dict([(n.name, n) for n in model.nodes()])
     nodes['res1'].properties['current_volume'] = Parameter(RESERVOIR_INITIAL_VOLUME)
     nodes['res2'].properties['current_volume'] = Parameter(RESERVOIR_INITIAL_VOLUME)
@@ -101,8 +105,9 @@ def run(model, xp, yp):
     
     # run the model for each day in the timeseries
     cost = 0.0
-    days = len(model.data['ts1'].df)
+    days = (to_date-from_date).days + 1
     for n in range(days):
+        times = model.timestamp
         res = model.step()
         
         # calculate total water supplied to the demands
@@ -116,15 +121,21 @@ def run(model, xp, yp):
         except KeyError:
             pass
 
-        if total_supplied != 191:
-            #print(total_supplied)
-            cost += (191-total_supplied) * 100.0
-        
-        # update the cumulative pumping cost
+        # pumping incurs a cost
         try:
             cost += res[3][(nodes['res1'], nodes['link1'])] * TRANSFER_COST
         except KeyError:
             pass
+
+        # penalty if demand is not met
+        if total_supplied != 191:
+            cost += (191-total_supplied) * 100.0
+        
+        # penalty if emergency storage is used
+        if nodes['res1'].properties['current_volume'].value(None) < EMERGENCY_STORAGE_VOLUME:
+            cost += 1000.0
+        if nodes['res2'].properties['current_volume'].value(None) < EMERGENCY_STORAGE_VOLUME:
+            cost += 1000.0
     
     return (n, cost)
 
@@ -132,7 +143,7 @@ model = create_model()
 
 # get day in year for first day in each month
 month_days = []
-for n in range(1, 12+1, 3):
+for n in range(1, 12+1, 1):
     month_days.append(pd.to_datetime('2015-{}-1'.format(n)).dayofyear)
 
 def eval_func(chromosome):
@@ -150,36 +161,38 @@ def eval_func(chromosome):
 
 from pyevolve import G1DList, GSimpleGA, Consts, DBAdapters, Initializators, Mutators
 
-# configure the GA
-genome = G1DList.G1DList(len(month_days))
-genome.setParams(rangemin=0.0, rangemax=1.0, gauss_sigma=0.05)
-genome.initializator.set(Initializators.G1DListInitializatorReal)
-genome.mutator.set(Mutators.G1DListMutatorRealGaussian)
-genome.evaluator.set(eval_func)
-ga = GSimpleGA.GSimpleGA(genome)
-ga.setGenerations(100)
-ga.setPopulationSize(10)
-ga.setCrossoverRate(0.8)
-ga.setMutationRate(0.1)
-#ga.setElitism(True)
-#ga.setElitismReplacement(1)
-ga.setMultiProcessing(flag=True, full_copy=True)
-ga.setMinimax(Consts.minimaxType["minimize"])
+if __name__ == '__main__':
+    # must call this inside __main__, otherwise multiprocessing breaks
+    
+    # configure the GA
+    genome = G1DList.G1DList(len(month_days))
+    genome.setParams(rangemin=0.0, rangemax=1.0, gauss_sigma=0.05)
+    genome.initializator.set(Initializators.G1DListInitializatorReal)
+    genome.mutator.set(Mutators.G1DListMutatorRealGaussian)
+    genome.evaluator.set(eval_func)
+    ga = GSimpleGA.GSimpleGA(genome)
+    ga.setGenerations(100)
+    ga.setPopulationSize(10)
+    ga.setCrossoverRate(0.8)
+    ga.setMutationRate(0.1)
+    #ga.setElitism(True)
+    #ga.setElitismReplacement(1)
+    ga.setMultiProcessing(flag=True, full_copy=True)
+    ga.setMinimax(Consts.minimaxType["minimize"])
 
-# log to sqlite database
-# to view results, try:
-# $ python venv/bin/pyevolve_graph.py -i ex1 -f pyevolve.db -3
-sqlite_adapter = DBAdapters.DBSQLite(identify='ga1')
-ga.setDBAdapter(sqlite_adapter)
+    # log to sqlite database
+    # to view results, try:
+    # $ python venv/bin/pyevolve_graph.py -i ga1 -f pyevolve.db -3
+    sqlite_adapter = DBAdapters.DBSQLite(identify='ga1')
+    ga.setDBAdapter(sqlite_adapter)
 
-print('Running genetic algorithm...')
-ga.evolve(freq_stats=1)
+    print('Running genetic algorithm...')
+    ga.evolve(freq_stats=1)
 
-print ga.bestIndividual()
+    print ga.bestIndividual()
 
-# display the resource curve for the best individual
-import matplotlib.pyplot as plt
-chromosome = ga.bestIndividual().genomeList
-plt.plot(range(1, 14), chromosome + [chromosome[0]])
-plt.xlim(1, 13)
-plt.show()
+    # display the resource curve for the best individual
+    import matplotlib.pyplot as plt
+    chromosome = ga.bestIndividual().genomeList
+    plt.plot(chromosome + [chromosome[0]])
+    plt.show()
