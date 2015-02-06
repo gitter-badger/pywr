@@ -14,7 +14,7 @@ from pywr.core import *
 RESERVOIR_MAX_VOLUME = 20000
 RESERVOIR_INITIAL_VOLUME = RESERVOIR_MAX_VOLUME * 0.8
 EMERGENCY_STORAGE_VOLUME = RESERVOIR_MAX_VOLUME * 0.15
-TRANSFER_COST = 20.0
+TRANSFER_COST = 2.0
 LINK_MAX_FLOW = 10.0
 
 def interpolate_profile(xp, yp):
@@ -117,9 +117,8 @@ def run(model, xp, yp):
             pass
 
         if total_supplied != 191:
-            # failure has occurred
-            # don't need to continue
-            return (n, float('inf'))
+            #print(total_supplied)
+            cost += (191-total_supplied) * 100.0
         
         # update the cumulative pumping cost
         try:
@@ -133,33 +132,37 @@ model = create_model()
 
 # get day in year for first day in each month
 month_days = []
-for n in range(1, 12+1, 1):
+for n in range(1, 12+1, 3):
     month_days.append(pd.to_datetime('2015-{}-1'.format(n)).dayofyear)
 
 def eval_func(chromosome):
+    #chromosome = [1.0]*len(month_days)
     # reset the model to it's inital state
     reset_model(model)
     # interpolate the resource curve
-    xp = month_days + [367]
-    yp = [a / 10.0 for a in chromosome] + [chromosome[0] / 10.0]
+    xp = month_days + [367,]
+    yp = chromosome[:] + [chromosome[0],]
+    #yp = [1.0]*13
     # evaluate the model
-    days, cost = run(model, xp, yp)
-    if cost == float('inf'):
-        return 1e9
-    else:
-        return cost
+    days, total_cost = run(model, xp, yp)
+    #print(total_cost, ['{:.2f}'.format(c) for c in chromosome[:]])
+    return total_cost
 
-from pyevolve import G1DList, GSimpleGA, Consts, DBAdapters
+from pyevolve import G1DList, GSimpleGA, Consts, DBAdapters, Initializators, Mutators
 
 # configure the GA
 genome = G1DList.G1DList(len(month_days))
-genome.setParams(rangemin=0, rangemax=100) # 0 - 100 %
+genome.setParams(rangemin=0.0, rangemax=1.0, gauss_sigma=0.05)
+genome.initializator.set(Initializators.G1DListInitializatorReal)
+genome.mutator.set(Mutators.G1DListMutatorRealGaussian)
 genome.evaluator.set(eval_func)
 ga = GSimpleGA.GSimpleGA(genome)
 ga.setGenerations(100)
 ga.setPopulationSize(10)
-ga.setElitism(True)
-ga.setElitismReplacement(1)
+ga.setCrossoverRate(0.8)
+ga.setMutationRate(0.1)
+#ga.setElitism(True)
+#ga.setElitismReplacement(1)
 ga.setMultiProcessing(flag=True, full_copy=True)
 ga.setMinimax(Consts.minimaxType["minimize"])
 
